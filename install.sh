@@ -98,7 +98,7 @@ cat > ~/.Xresources <<'EOF'
 #define S_cyan    #0aaeb3
 EOF
 
-xrdb ~/.Xresources
+
 
 # XFCE terminal with srcery colors
 mkdir -p ~/.config/xfce4/terminal
