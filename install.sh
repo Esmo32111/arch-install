@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# arch-dotfiles-install.sh (enhanced with zsh, fancy i3, inline srcery colors)
+#install.sh (enhanced with zsh, fancy i3, inline srcery colors)
 
 set -euo pipefail
 USER_HOME="${HOME}"
