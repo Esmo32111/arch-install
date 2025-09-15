@@ -1,513 +1,134 @@
 #!/usr/bin/env bash
-# arch-dotfiles-install.sh
-# Single-script bootstrap for Arch Linux: i3, yay, common tools, dotfiles, and Srcery Xresources.
-# USAGE: curl -o install.sh https://... && chmod +x install.sh && ./install.sh
-# Run as a normal user (script uses sudo for system installs).
-set -euo pipefail
+set -e
 
-USER_HOME="${HOME}"
-DOTFILES_DIR="${USER_HOME}/.dotfiles"
-YAY_DIR="/tmp/yay-build"
-AUR_BUILD_DEPENDENCIES=(git base-devel)
-PACMAN_PKGS=(
-  # X & core
-  xorg-server xorg-xinit xorg-apps xterm xorg-fonts-misc \
-  # Window manager and utilities
-  i3-wm i3status rofi dmenu xbindkeys feh picom \
-  # Terminals and shells
-  alacritty kitty bash zsh \
-  # Fonts & icons
-  ttf-dejavu ttf-liberation noto-fonts ttf-nerd-fonts-symbols \
-  # Compositor/appearance
-  lxappearance papirus-icon-theme \
-  # Audio & networking
-  networkmanager network-manager-applet pipewire pipewire-pulse pavucontrol bluez bluez-utils \
-  # Browsers / multimedia / misc
-  firefox neovim mpv thunar vlc imagemagick \
-  # Tools for development
-  git make cmake python python-pip nodejs npm go docker unzip unzip zip rsync \
-  # CLI niceties
-  tmux htop ripgrep fd bat exa glances \
-  # For printing (optional)
-  cups
-)
+# -------------------------------
+# Arch Linux XFCE4 Bootstrap Script
+# With srcery colorscheme + zsh
+# -------------------------------
 
-# AUR packages to install via yay (will be installed after yay is built)
-AUR_PKGS=(
-  polybar # if you want a fancy status bar
-  ttf-fira-code-nerd # extra font example
-  # add any other AUR-only packages you want here
-)
+echo "==> Updating system..."
+sudo pacman -Syu --noconfirm
 
-# Srcery (official) repo to fetch terminal/Xresources files from:
-SRCERY_REPO="https://github.com/srcery-colors/srcery-terminal.git"
+# -------------------------------
+# Base Packages
+# -------------------------------
+echo "==> Installing base packages..."
+sudo pacman -S --noconfirm --needed \
+    base-devel git curl wget unzip htop neofetch \
+    xfce4 xfce4-goodies lightdm lightdm-gtk-greeter \
+    alacritty \
+    thunar thunar-volman file-roller \
+    firefox \
+    pulseaudio pavucontrol \
+    network-manager-applet \
+    gvfs gvfs-mtp \
+    zsh zsh-completions zsh-autosuggestions zsh-syntax-highlighting \
+    noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-dejavu ttf-font-awesome
 
-# -------------------------------------------------------
-# Helper functions
-# -------------------------------------------------------
-echoinfo(){ printf "\\n\\e[1;34m[INFO]\\e[0m %s\\n" "$*"; }
-echowarn(){ printf "\\n\\e[1;33m[WARN]\\e[0m %s\\n" "$*"; }
-echofail(){ printf "\\n\\e[1;31m[ERROR]\\e[0m %s\\n" "$*"; exit 1; }
+# Enable services
+sudo systemctl enable NetworkManager
+sudo systemctl enable lightdm
 
-ensure_sudo(){
-  if ! command -v sudo >/dev/null 2>&1; then
-    echowarn "sudo not found. Installing sudo..."
-    su -c "pacman -Sy --noconfirm sudo"
-  fi
-}
-
-check_arch(){
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release
-    if [[ "${ID:-}" != "arch" && "${ID_LIKE:-}" != *"arch"* ]]; then
-      echofail "This script is intended for Arch Linux. /etc/os-release indicates: ${ID:-unknown}"
-    fi
-  else
-    echofail "/etc/os-release not found; cannot confirm Arch Linux."
-  fi
-}
-
-install_pacman_packages(){
-  echoinfo "Refreshing pacman DB and installing packages..."
-  sudo pacman -Syu --noconfirm
-  # group installation in chunks to avoid extremely long single command lines
-  sudo pacman -S --needed --noconfirm "${PACMAN_PKGS[@]}"
-}
-
-install_aur_helper(){
-  # installs yay from AUR (builds it)
-  if command -v yay >/dev/null 2>&1; then
-    echoinfo "yay already installed."
-    return
-  fi
-
-  echoinfo "Installing AUR helper (yay)..."
-  mkdir -p "${YAY_DIR}"
-  pushd "${YAY_DIR}" >/dev/null
-  git clone https://aur.archlinux.org/yay.git || {
-    echowarn "Failed to clone yay from AUR; trying GitHub mirror..."
-    git clone https://github.com/Jguer/yay.git
-  }
-  cd yay
-  makepkg -si --noconfirm
-  popd >/dev/null
-  echoinfo "yay installed."
-}
-
-install_aur_packages(){
-  if [[ ${#AUR_PKGS[@]} -eq 0 ]]; then
-    echoinfo "No AUR packages configured to install."
-    return
-  fi
-  echoinfo "Installing AUR packages via yay..."
-  yay -S --noconfirm --needed "${AUR_PKGS[@]}"
-}
-
-create_dotfiles_layout(){
-  echoinfo "Creating dotfiles directory at ${DOTFILES_DIR}..."
-  mkdir -p "${DOTFILES_DIR}/config/i3"
-  mkdir -p "${DOTFILES_DIR}/config/alacritty"
-  mkdir -p "${DOTFILES_DIR}/config/rofi"
-  mkdir -p "${DOTFILES_DIR}/config/polybar"
-  mkdir -p "${DOTFILES_DIR}/bin"
-}
-
-install_srcery_xresources(){
-  echoinfo "Cloning srcery terminal repository to fetch Xresources..."
-  local tmp="/tmp/srcery-terminal"
-  rm -rf "${tmp}"
-  git clone --depth 1 "${SRCERY_REPO}" "${tmp}" || {
-    echowarn "Failed to git-clone ${SRCERY_REPO}. Skipping srcery Xresources install."
-    return
-  }
-
-  # try to find a Xresources/xrdb file in the repo
-  if [[ -f "${tmp}/Xresources/srcery.Xresources" ]]; then
-    cp "${tmp}/Xresources/srcery.Xresources" "${DOTFILES_DIR}/Xresources.srcery"
-    echoinfo "Installed srcery Xresources to ${DOTFILES_DIR}/Xresources.srcery"
-  else
-    # fallback: some repos place files in different paths - try generic Xresources files
-    find "${tmp}" -type f -iname "*xresources*" -maxdepth 3 -print -quit | while read -r f; do
-      cp "$f" "${DOTFILES_DIR}/Xresources.srcery"
-      echoinfo "Installed srcery Xresources (fallback) to ${DOTFILES_DIR}/Xresources.srcery"
-      break
-    done
-  fi
-
-  # also copy alacritty or term config if present
-  if [[ -f "${tmp}/alacritty.yml" ]]; then
-    cp "${tmp}/alacritty.yml" "${DOTFILES_DIR}/config/alacritty/alacritty.yml"
-    echoinfo "Copied srcery alacritty.yml to ${DOTFILES_DIR}/config/alacritty/alacritty.yml"
-  fi
-
-  # Clean up
-  rm -rf "${tmp}"
-}
-
-write_bashrc(){
-  cat > "${DOTFILES_DIR}/bashrc" <<'EOF'
-# ~/.dotfiles/bashrc - generated by arch-dotfiles-install.sh
-# load system profile
-if [ -f /etc/profile ]; then
-  . /etc/profile
+# -------------------------------
+# Install yay (AUR helper)
+# -------------------------------
+if ! command -v yay >/dev/null 2>&1; then
+    echo "==> Installing yay..."
+    cd /tmp
+    git clone https://aur.archlinux.org/yay.git
+    cd yay
+    makepkg -si --noconfirm
+    cd ~
 fi
 
-# custom PATH additions
-export PATH="$HOME/.local/bin:$PATH"
+# -------------------------------
+# AUR Packages
+# -------------------------------
+yay -S --noconfirm --needed \
+    ttf-jetbrains-mono-nerd \
+    google-chrome \
+    spotify \
+    visual-studio-code-bin \
+    xfce4-screensaver
 
-# nice prompt: user@host:cwd $
-PS1='\u@\h:\w\$ '
+# -------------------------------
+# DOTFILES + CONFIG
+# -------------------------------
 
-# some aliases
-alias ll='ls -lah --color=auto'
-alias la='ls -A'
-alias l='ls -CF'
-alias gs='git status'
+mkdir -p ~/.config
 
-# useful env
-export EDITOR=neovim
-
-# load .profile if present
-[ -f "$HOME/.profile" ] && source "$HOME/.profile"
-EOF
-
-  ln -sf "${DOTFILES_DIR}/bashrc" "${USER_HOME}/.bashrc"
-  echoinfo "Wrote ~/.bashrc (symlinked to ${DOTFILES_DIR}/bashrc)."
-}
-
-write_xinitrc_and_i3(){
-  # .xinitrc
-  cat > "${DOTFILES_DIR}/xinitrc" <<'EOF'
-#!/bin/sh
-# ~/.xinitrc - start i3 and set Xresources
-if [ -f "$HOME/.Xresources" ]; then
-  xrdb -merge "$HOME/.Xresources"
-fi
-
-# start compositor if available
-picom --config $HOME/.config/picom/picom.conf &
-
-# start i3
-exec i3
-EOF
-  ln -sf "${DOTFILES_DIR}/xinitrc" "${USER_HOME}/.xinitrc"
-  chmod +x "${DOTFILES_DIR}/xinitrc"
-
-  # minimal i3 config (very basic)
-  cat > "${DOTFILES_DIR}/config/i3/config" <<'EOF'
-# minimal i3 config generated by installer
-set $mod Mod4
-font pango:monospace 10
-
-bindsym $mod+Return exec alacritty
-bindsym $mod+d exec rofi -show run
-bindsym $mod+Shift+q kill
-bindsym $mod+Shift+r restart
-
-exec --no-startup-id nm-applet
-exec --no-startup-id /usr/bin/pipewire
-EOF
-  ln -sf "${DOTFILES_DIR}/config/i3/config" "${USER_HOME}/.config/i3/config"
-  echoinfo "Wrote ~/.xinitrc and a minimal i3 config."
-}
-
-write_alacritty_config(){
-  # create a minimal alacritty config that will pick up srcery if present
-  cat > "${DOTFILES_DIR}/config/alacritty/alacritty.yml" <<'EOF'
-# Alacritty config - minimal
-window:
-  padding:
-    x: 6
-    y: 6
-
-font:
+# Alacritty config with Srcery colors
+mkdir -p ~/.config/alacritty
+cat > ~/.config/alacritty/alacritty.yml <<'EOF'
+colors:
+  primary:
+    background: '0x1c1b19'
+    foreground: '0xfce8c3'
   normal:
-    family: "DejaVu Sans Mono"
-    size: 11.0
-
-# If you have an Xresources-based colorscheme, alacritty can be set manually,
-# but here we recommend using the srcery alacritty.yml if present
+    black:   '0x1c1b19'
+    red:     '0xef2f27'
+    green:   '0x519f50'
+    yellow:  '0xfbb829'
+    blue:    '0x2c78bf'
+    magenta: '0xe02c6d'
+    cyan:    '0x0aaeb3'
+    white:   '0xbaa67f'
+  bright:
+    black:   '0x918175'
+    red:     '0xf75341'
+    green:   '0x98bc37'
+    yellow:  '0xfed06e'
+    blue:    '0x68a8e4'
+    magenta: '0xff5c8f'
+    cyan:    '0x2be4d0'
+    white:   '0xfce8c3'
 EOF
 
-  ln -sf "${DOTFILES_DIR}/config/alacritty/alacritty.yml" "${USER_HOME}/.config/alacritty/alacritty.yml"
-  echoinfo "Wrote minimal alacritty config (you can replace it with srcery's alacritty.yml)."
-}
-
-write_rofi_and_polybar_samples(){
-  # rofi config sample
-  cat > "${DOTFILES_DIR}/config/rofi/config.rasi" <<'EOF'
-/* rofi config - simple */
-configuration {
-  modi: "run,drun";
-  sidebar-mode: false;
-}
-window {
-  width: 50%;
-}
+# Xresources (srcery)
+cat > ~/.Xresources <<'EOF'
+! Srcery color scheme
+*background: #1c1b19
+*foreground: #fce8c3
+*cursorColor: #fce8c3
+#define S_red     #ef2f27
+#define S_green   #519f50
+#define S_yellow  #fbb829
+#define S_blue    #2c78bf
+#define S_magenta #e02c6d
+#define S_cyan    #0aaeb3
 EOF
-  ln -sf "${DOTFILES_DIR}/config/rofi/config.rasi" "${USER_HOME}/.config/rofi/config.rasi"
 
-  # basic polybar sample (if polybar is installed later you can tweak)
-  cat > "${DOTFILES_DIR}/config/polybar/config" <<'EOF'
-[bar/example]
-width = 100%
-height = 24
-modules-left = date
-modules-right = cpu memory
+xrdb ~/.Xresources
+
+# XFCE terminal with srcery colors
+mkdir -p ~/.config/xfce4/terminal
+cat > ~/.config/xfce4/terminal/terminalrc <<'EOF'
+[Configuration]
+ColorForeground=#fce8c3
+ColorBackground=#1c1b19
+ColorCursor=#fce8c3
+ColorPalette=#1c1b19;#ef2f27;#519f50;#fbb829;#2c78bf;#e02c6d;#0aaeb3;#baa67f;#918175;#f75341;#98bc37;#fed06e;#68a8e4;#ff5c8f;#2be4d0;#fce8c3
+FontName=JetBrainsMono Nerd Font 11
 EOF
-  ln -sf "${DOTFILES_DIR}/config/polybar/config" "${USER_HOME}/.config/polybar/config"
 
-  echoinfo "Wrote sample rofi and polybar configs."
-}
-
-link_Xresources_srcery(){
-  # If we have srcery Xresources in dotfiles, link it to ~/.Xresources (and load)
-  if [[ -f "${DOTFILES_DIR}/Xresources.srcery" ]]; then
-    ln -sf "${DOTFILES_DIR}/Xresources.srcery" "${USER_HOME}/.Xresources"
-    # merge right away
-    xrdb -merge "${USER_HOME}/.Xresources" || echowarn "xrdb merge failed (maybe X not running)."
-    echoinfo "Linked srcery Xresources -> ~/.Xresources and merged to X server if possible."
-  else
-    echowarn "No srcery Xresources found in ${DOTFILES_DIR}; skipping linking."
-  fi
-}
-
-enable_services(){
-  echoinfo "Enabling NetworkManager and CUPS services (if installed)..."
-  sudo systemctl enable --now NetworkManager.service || echowarn "NetworkManager enable failed"
-  sudo systemctl enable --now cups.service || echowarn "CUPS enable failed or not installed"
-}
-
-final_notes(){
-  cat <<EOF
-
-Done — basic installation and dotfiles generation finished.
-
-Next steps (recommended):
-  1. Review ${DOTFILES_DIR} and remove/modify anything you don't want.
-  2. Log out and start X with: startx
-     - Or enable a display manager of your choice (gdm/sddm/lightdm).
-  3. If you want polybar, monior, or other components, customize ${DOTFILES_DIR}/config/*.
-  4. To install more AUR packages, edit the array at top of the script and re-run 'install_aur_packages' step or run:
-       yay -S <package-name>
-  5. If you want the full official Srcery configs for Alacritty / Termite / iTerm2 etc, they were pulled from:
-       ${SRCERY_REPO}
-     (the script attempted to copy Xresources & alacritty.yml into ${DOTFILES_DIR})
-
-Important: You can safely re-run this script; it mostly symlinks and uses --noconfirm installs.
-
-EOF
-}
-
-# ----------------------
-# Main
-# ----------------------
-main(){
-  check_arch
-  ensure_sudo
-  echoinfo "Starting Arch dotfiles installer..."
-
-  # Install system packages
-  install_pacman_packages
-
-  # Ensure AUR build dependencies are installed
-  echoinfo "Ensuring AUR build dependencies (base-devel, git)..."
-  sudo pacman -S --needed --noconfirm "${AUR_BUILD_DEPENDENCIES[@]}"
-
-  # Install yay (AUR helper)
-  install_aur_helper
-
-  # Install AUR packages
-  install_aur_packages
-
-  # Create dotfiles layout
-  create_dotfiles_layout
-
-  # Fetch srcery Xresources & optional alacritty config
-  install_srcery_xresources
-
-  # Write dotfile contents and symlinks
-  write_bashrc
-  write_xinitrc_and_i3
-  write_alacritty_config
-  write_rofi_and_polybar_samples
-
-  # Link Xresources to ~/.Xresources and load (if available)
-  link_Xresources_srcery
-
-  # Enable services
-  enable_services
-
-  final_notes
-}
-
-# run
-main "$@"
-
-set -euo pipefail
-USER_HOME="${HOME}"
-DOTFILES_DIR="${USER_HOME}/.dotfiles"
-
-PACMAN_PKGS=(
-  xorg-server xorg-xinit xorg-apps
-  i3-wm i3status rofi dmenu xbindkeys feh picom
-  alacritty kitty bash zsh
-  ttf-dejavu ttf-liberation noto-fonts ttf-nerd-fonts-symbols
-  lxappearance papirus-icon-theme
-  networkmanager network-manager-applet pipewire pipewire-pulse pavucontrol
-  bluez bluez-utils brightnessctl scrot
-  firefox neovim mpv thunar vlc imagemagick
-  git make cmake python python-pip nodejs npm go docker unzip zip rsync
-  tmux htop ripgrep fd bat exa glances
-  cups
-)
-
-AUR_PKGS=( polybar ttf-fira-code-nerd )
-
-# -------------------------------------------------------
-echoinfo(){ printf "\n\033[1;34m[INFO]\033[0m %s\n" "$*"; }
-
-create_dotfiles_layout(){
-  mkdir -p "${DOTFILES_DIR}/config/i3"
-  mkdir -p "${DOTFILES_DIR}/config/polybar"
-  mkdir -p "${DOTFILES_DIR}/config/alacritty"
-  mkdir -p "${DOTFILES_DIR}/config/rofi"
-}
-
-install_zsh_ohmyzsh(){
-  echoinfo "Installing Oh-My-Zsh and plugins..."
-  if [[ ! -d "${USER_HOME}/.oh-my-zsh" ]]; then
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-  fi
-  git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-$USER_HOME/.oh-my-zsh/custom}/plugins/zsh-autosuggestions || true
-  git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-$USER_HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting || true
-
-  cat > "${DOTFILES_DIR}/zshrc" <<'EOF'
+# ZSH config
+chsh -s /bin/zsh
+cat > ~/.zshrc <<'EOF'
 export ZSH="$HOME/.oh-my-zsh"
 ZSH_THEME="agnoster"
 plugins=(git zsh-autosuggestions zsh-syntax-highlighting)
-
 source $ZSH/oh-my-zsh.sh
 
-alias ll='ls -lah --color=auto'
-alias gs='git status'
-export EDITOR=nvim
-EOF
-  ln -sf "${DOTFILES_DIR}/zshrc" "${USER_HOME}/.zshrc"
-}
-
-write_inline_srcery_xresources(){
-  cat > "${DOTFILES_DIR}/Xresources" <<'EOF'
-! Srcery Xresources inline theme
-*.foreground:   #ebdbb2
-*.background:   #1c1b19
-*.cursorColor:  #fbb829
-*.color0:  #1c1b19
-*.color1:  #ef2f27
-*.color2:  #519f50
-*.color3:  #fbb829
-*.color4:  #2c78bf
-*.color5:  #e02c6d
-*.color6:  #0aaeb3
-*.color7:  #baa67f
-*.color8:  #918175
-*.color9:  #f75341
-*.color10: #98bc37
-*.color11: #fed06e
-*.color12: #68a8e4
-*.color13: #ff5c8f
-*.color14: #2be4d0
-*.color15: #fce8c3
-EOF
-  ln -sf "${DOTFILES_DIR}/Xresources" "${USER_HOME}/.Xresources"
-}
-
-write_fancy_i3_config(){
-  cat > "${DOTFILES_DIR}/config/i3/config" <<'EOF'
-# Fancy i3 config with Polybar, gaps, workspace icons
-
-set $mod Mod4
-font pango:Fira Code Nerd Font 11
-gaps inner 8
-gaps outer 0
-
-# Workspaces with icons
-set $ws1 "1: "
-set $ws2 "2: "
-set $ws3 "3: "
-set $ws4 "4: "
-set $ws5 "5: "
-
-bindsym $mod+1 workspace $ws1
-bindsym $mod+2 workspace $ws2
-bindsym $mod+3 workspace $ws3
-bindsym $mod+4 workspace $ws4
-bindsym $mod+5 workspace $ws5
-
-# Launchers
-bindsym $mod+Return exec alacritty
-bindsym $mod+d exec rofi -show drun
-
-# Screenshots
-bindsym Print exec scrot ~/Pictures/screenshot-%Y-%m-%d-%H%M%S.png
-
-# Volume keys
-bindsym XF86AudioRaiseVolume exec pactl set-sink-volume @DEFAULT_SINK@ +5%
-bindsym XF86AudioLowerVolume exec pactl set-sink-volume @DEFAULT_SINK@ -5%
-bindsym XF86AudioMute exec pactl set-sink-mute @DEFAULT_SINK@ toggle
-
-# Brightness keys
-bindsym XF86MonBrightnessUp exec brightnessctl set +10%
-bindsym XF86MonBrightnessDown exec brightnessctl set 10%-
-
-# Restart / exit
-bindsym $mod+Shift+r restart
-bindsym $mod+Shift+e exec "i3-msg exit"
-
-# Autostart apps
-exec --no-startup-id nm-applet
-exec --no-startup-id picom
-exec_always --no-startup-id $HOME/.config/polybar/launch.sh
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
 EOF
 
-  mkdir -p "${DOTFILES_DIR}/config/polybar"
-  cat > "${DOTFILES_DIR}/config/polybar/config" <<'EOF'
-[bar/top]
-width = 100%
-height = 28
-modules-left = i3
-modules-center = date
-modules-right = pulseaudio memory cpu
+if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    echo "==> Installing oh-my-zsh..."
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+fi
 
-[module/i3]
-type = internal/i3
-format = <label-state>
-label-focused = %name%
-label-unfocused = %name%
-
-[module/date]
-type = internal/date
-interval = 5
-date = %Y-%m-%d %H:%M
-
-[module/pulseaudio]
-type = internal/pulseaudio
-
-[module/cpu]
-type = internal/cpu
-
-[module/memory]
-type = internal/memory
-EOF
-
-  cat > "${DOTFILES_DIR}/config/polybar/launch.sh" <<'EOF'
-#!/bin/bash
-killall -q polybar
-while pgrep -u $UID -x polybar >/dev/null; do sleep 1; done
-polybar top &
-EOF
-  chmod +x "${DOTFILES_DIR}/config/polybar/launch.sh"
-
-  ln -sf "${DOTFILES_DIR}/config/i3/config" "${USER_HOME}/.config/i3/config"
-  ln -sf "${DOTFILES_DIR}/config/polybar" "${USER_HOME}/.config/polybar"
-}
+# -------------------------------
+echo "✅ Setup complete!"
+echo "Reboot and log into XFCE4 (LightDM will start automatically)."
