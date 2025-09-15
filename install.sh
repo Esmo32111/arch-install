@@ -14,7 +14,7 @@ sudo pacman -Syu --noconfirm
 # -------------------------------
 echo "==> Installing base packages..."
 sudo pacman -S --noconfirm --needed \
-    base-devel git curl wget unzip htop neofetch \
+    base-devel git curl wget unzip htop \
     xfce4 xfce4-goodies lightdm lightdm-gtk-greeter \
     alacritty \
     thunar thunar-volman file-roller \
